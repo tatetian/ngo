@@ -450,10 +450,12 @@ mod test {
                 async_rt::task::spawn({
                     let ring = ring.clone();
                     async move {
-                        loop {
-                            ring.poll_completions();
-                            async_rt::sched::yield_().await;
+                        let mut remain_tries = 100;
+                        while remain_tries > 0 && ring.poll_completions() == 0 {
+                            remain_tries -= 1;
                         }
+
+                        async_rt::sched::yield_().await;
                     }
                 });
                 ring
