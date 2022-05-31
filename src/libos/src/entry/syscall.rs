@@ -488,6 +488,7 @@ macro_rules! process_syscall_table_with_callback {
             (SpawnGlibc = 359) => do_spawn_for_glibc(child_pid_ptr: *mut u32, path: *const i8, argv: *const *const i8, envp: *const *const i8, fa: *const SpawnFileActions, attribute_list: *const posix_spawnattr_t),
             (SpawnMusl = 360) => do_spawn_for_musl(child_pid_ptr: *mut u32, path: *const i8, argv: *const *const i8, envp: *const *const i8, fdop_list: *const FdOp, attribute_list: *const posix_spawnattr_t),
             (MountRootFS = 363) => do_mount_rootfs(key_ptr: *const sgx_key_128bit_t, occlum_json_mac_ptr: *const sgx_aes_gcm_128bit_tag_t),
+            (Debug = 364) => do_debug(cmd_id: i32),
         }
     };
 }
@@ -852,4 +853,95 @@ async fn do_prlimit(
 
 async fn handle_unsupported() -> Result<isize> {
     return_errno!(ENOSYS, "Unimplemented or unknown syscall")
+}
+
+use self::debug::do_debug;
+
+mod debug {
+    use crate::prelude::*;
+
+    use async_io::file::{Async, File};
+    use async_io::util::channel::{Channel, Consumer, Producer};
+    use async_rt::time::Instant;
+
+    pub async fn do_debug(cmd_id: i32) -> Result<isize> {
+        match cmd_id {
+            1 => {
+                transfer_data_with_big_buf().await;
+            }
+            _ => {
+                error!("unrecognized test_id");
+            }
+        }
+        Ok(0)
+    }
+
+    async fn transfer_data_with_big_buf() {
+        const TOTAL_NBYTES: usize = 4 * 1024 * 1024 * 1024;
+        //const TOTAL_NBYTES: usize = 4 * 1024 * 1024;
+        const CHANNEL_CAPACITY: usize = 1 * 1024 * 1024;
+        const BUF_SIZE: usize = 4 * 1024;
+        let is_benchmark = true;
+        do_transfer_data(TOTAL_NBYTES, CHANNEL_CAPACITY, BUF_SIZE, is_benchmark).await;
+    }
+
+    async fn do_transfer_data(
+        total_nbytes: usize,
+        channel_capacity: usize,
+        buf_size: usize,
+        is_benchmark: bool,
+    ) {
+        let channel = Channel::with_capacity(channel_capacity).unwrap();
+        let (producer, consumer) = channel.split();
+        let producer = Async::new(producer);
+        let consumer = Async::new(consumer);
+
+        let start = Instant::now();
+
+        let producer_handle = async_rt::task::spawn(async move {
+            let mut buf = Vec::with_capacity(buf_size);
+            unsafe {
+                buf.set_len(buf.capacity());
+            }
+
+            let mut sofar_nbytes = 0;
+            while sofar_nbytes < total_nbytes {
+                let nbytes = producer.write(buf.as_slice()).await.unwrap();
+                sofar_nbytes += nbytes;
+            }
+        });
+
+        let consumer_handle = async_rt::task::spawn(async move {
+            let mut buf = Vec::with_capacity(buf_size);
+            unsafe {
+                buf.set_len(buf.capacity());
+            }
+
+            let mut sofar_nbytes = 0;
+            while sofar_nbytes < total_nbytes {
+                let nbytes = consumer.read(buf.as_mut_slice()).await.unwrap();
+                sofar_nbytes += nbytes;
+            }
+        });
+
+        producer_handle.await;
+        consumer_handle.await;
+
+        let stop = Instant::now();
+
+        if !is_benchmark {
+            return;
+        }
+
+        let elapsed = stop - start;
+        let buf_size_kb = buf_size / 1024;
+        let total_mb = (total_nbytes as f64) / 1_000_000.0;
+        let elapsed_secs = (elapsed.as_nanos() as f64) / 1_000_000_000.0;
+        let throughput = (total_mb / elapsed_secs) as u64;
+        info!(
+            "channel: buf_size = {} KiB, transfered data = {:.1} MB, \
+            elapsed time = {:.1} s, throughput = {:.0} MB/s",
+            buf_size_kb, total_mb, elapsed_secs, throughput
+        );
+    }
 }

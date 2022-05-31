@@ -2,6 +2,7 @@
 TESTS="empty hello_world getpid malloc mmap spawn exit_group pthread tls \
     signal cpuid rdtsc emulate_syscall rlimit time file link stat chmod \
     access mkdir rename truncate chown symlink eventfd"
+TESTS="debug"
 
 GREEN='\033[1;32m'
 NO_COLOR='\033[0m'
@@ -16,6 +17,6 @@ cd ../build/test/
 for t in $TESTS
 do
     /bin/echo -e "[TEST] ${GREEN}$t${NO_COLOR}"
-    occlum run /bin/$t
+    OCCLUM_LOG_LEVEL=info occlum run /bin/$t
     /bin/echo -e ""
 done
